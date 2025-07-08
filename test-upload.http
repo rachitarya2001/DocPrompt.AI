@@ -1,0 +1,18 @@
+# ### Extract Text from Aadhaar
+# POST http://localhost:5000/api/extract-text
+# Content-Type: application/json
+
+# {
+#   "filePath": "uploads\\1751951510096-Rachit-aadhar.jpg"
+# }
+
+
+### Process Aadhaar into Vector Database
+POST http://localhost:5000/api/process-document
+Content-Type: application/json
+
+{
+  "filePath": "uploads\\1751951510096-Rachit-aadhar.jpg",
+  "extractedText": "AADHAAR\n\nRachit\n2001-07-25\nMALE\n\nXXXXXXXX5028\n\nAddress\n\nS/O Satender Kumar, ganeshpuram, kankhal, Hardwar,\nHaridwar, Kankhal, Uttarakhand, 249408\n\nPowered by\n\nDigiLoc\n\nTap to Zoom\n\nAa arene, A wears",
+  "documentId": "rachit-aadhar"
+}

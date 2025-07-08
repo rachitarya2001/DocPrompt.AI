@@ -130,6 +130,98 @@ router.post('/extract-text', (req, res) => {
     });
 });
 
+// POST /api/process-document - Store document in vector database
+router.post('/process-document', (req, res) => {
+    const { filePath, extractedText, documentId } = req.body;
+
+    if (!filePath || !extractedText || !documentId) {
+        return res.status(400).json({
+            success: false,
+            message: 'File path, extracted text, and document ID are required'
+        });
+    }
+
+    console.log(`📝 Processing document: ${documentId}`);
+    const startTime = Date.now();
+
+    // ✅ Use persistent daemon (FAST)
+    req.app.locals.sendToPythonProcess('store', {
+        file_path: filePath,
+        text: extractedText,
+        document_id: documentId
+    }, (error, result) => {
+        const processingTime = Date.now() - startTime;
+        console.log(`⚡ Document processed in ${processingTime}ms`);
+
+        if (error) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to process document',
+                error: error.message
+            });
+        }
+
+        // Add timing info to response
+        result.processing_time_ms = processingTime;
+        res.json(result);
+    });
+});
+
+// POST /api/ask-question - Ask AI questions with caching
+router.post('/ask-question', (req, res) => {
+    const { question, documentId } = req.body;
+
+    if (!question) {
+        return res.status(400).json({
+            success: false,
+            message: 'Question is required'
+        });
+    }
+
+    // Check cache first (even faster!)
+    const cachedAnswer = req.app.locals.getCachedAnswer(question, documentId);
+    if (cachedAnswer) {
+        console.log(`📦 Cache hit for: "${question}"`);
+        return res.json({
+            ...cachedAnswer,
+            cached: true,
+            response_time_ms: 1 // Cache is instant
+        });
+    }
+
+    console.log(`❓ Processing question: "${question}"`);
+    const startTime = Date.now();
+
+    // ✅ Use persistent daemon (FAST)
+    req.app.locals.sendToPythonProcess('query', {
+        question: question,
+        document_id: documentId || null
+    }, (error, result) => {
+        const processingTime = Date.now() - startTime;
+        console.log(`⚡ Question answered in ${processingTime}ms`);
+
+        if (error) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to process question',
+                error: error.message
+            });
+        }
+
+        // Cache successful responses
+        if (result.success) {
+            req.app.locals.setCachedAnswer(question, documentId, result);
+        }
+
+        // Add timing and cache info
+        result.cached = false;
+        result.response_time_ms = processingTime;
+        result.processed_timestamp = new Date().toISOString();
+
+        res.json(result);
+    });
+});
+
 
 
 module.exports = router;
