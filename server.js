@@ -3,6 +3,16 @@ const express = require('express');
 const app = express();
 
 app.use(express.json());
+
+const cors = require('cors');
+app.use(cors({
+    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+
 const { spawn } = require('child_process');
 const path = require('path');
 // Import routes
@@ -11,9 +21,11 @@ const apiRoutes = require('./src/routes/api');
 // Use routes
 app.use('/api', apiRoutes);
 
+
 // Simple in-memory cache for AI responses
 const questionCache = new Map();
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const MAX_CACHE_SIZE = 1000;
 
 // Cache helper functions
 function getCacheKey(question, documentId) {
@@ -25,7 +37,6 @@ function getCachedAnswer(question, documentId) {
     const cached = questionCache.get(key);
 
     if (cached && Date.now() - cached.timestamp < CACHE_EXPIRY) {
-        console.log('📦 Cache hit for:', question);
         return cached.answer;
     }
 
@@ -38,12 +49,16 @@ function getCachedAnswer(question, documentId) {
 }
 
 function setCachedAnswer(question, documentId, answer) {
+    if (questionCache.size >= MAX_CACHE_SIZE) {
+        const oldestKey = questionCache.keys().next().value;
+        questionCache.delete(oldestKey);
+        console.log('🧹 Cache size limit reached, removed oldest entry');
+    }
     const key = getCacheKey(question, documentId);
     questionCache.set(key, {
         answer: answer,
         timestamp: Date.now()
     });
-    console.log('💾 Cached answer for:', question);
 }
 
 // Make cache functions available to routes
@@ -58,10 +73,21 @@ let pythonProcess = null;
 let isProcessReady = false;
 const pendingRequests = new Map();
 let requestId = 0;
+let restartCount = 0;                    // ✅ ADD THIS
+const MAX_RESTARTS = 5;                  // ✅ ADD THIS  
+const RESTART_WINDOW = 60000;
 
 // Start persistent Python process
 function startPythonProcess() {
-    console.log('🚀 Starting persistent Python process...');
+
+    if (restartCount >= MAX_RESTARTS) {
+        console.error('❌ Max restart attempts reached. Manual intervention required.');
+        console.error('💡 Try restarting the server manually: npm run dev');
+        return;
+    }
+
+    restartCount++;  // ✅ ADD THIS
+    console.log(`🔄 Starting Python process (attempt ${restartCount})`);
 
     const scriptPath = path.join(__dirname, 'python-services/pinecone_daemon.py');
     pythonProcess = spawn('python', [scriptPath]);
@@ -70,10 +96,14 @@ function startPythonProcess() {
 
     pythonProcess.stdout.on('data', (data) => {
         buffer += data.toString();
-
-
-
-
+        if (!isProcessReady && buffer.includes('"status": "ready"')) {
+            setTimeout(() => {
+                if (isProcessReady) {
+                    restartCount = 0;
+                    console.log('✅ Python process stable, reset restart counter');
+                }
+            }, RESTART_WINDOW);
+        }
         // Process complete JSON lines
         const lines = buffer.split('\n');
         buffer = lines.pop() || ''; // Keep incomplete line in buffer

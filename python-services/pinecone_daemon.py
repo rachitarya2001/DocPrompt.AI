@@ -41,6 +41,7 @@ class PineconeDaemon:
                 chunks.append(chunk.strip())
         
         return chunks
+    
     def pad_embedding(self, embedding: List[float], target_dim: int = 384) -> List[float]:
         """Pad or truncate embedding to match Pinecone index dimensions"""
         if len(embedding) == target_dim:
@@ -88,7 +89,7 @@ class PineconeDaemon:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    def query_document(self, question: str, document_id: str = None, top_k: int = 3):
+    def query_document(self, question: str, document_id: str = None, top_k: int = 3, conversation_history: list = None):
         """Query Pinecone and get AI response"""
         try:
             question_embedding = self.embedding_model.encode([question]).tolist()[0]
@@ -128,13 +129,24 @@ class PineconeDaemon:
                 }
             
             context = "\n\n".join(relevant_chunks)
+
+            conversation_context = ""
+            if conversation_history:
+                recent_messages = conversation_history[-4:]  # Last 4 messages
+                for msg in recent_messages:
+                    role = "User" if msg.get('type') == 'user' else "Assistant"
+                    content = msg.get('content', '')[:150]  # Limit to 150 chars
+                    conversation_context += f"{role}: {content}\n"
             
-            prompt = f"""Based on the following document content, please answer the question accurately and concisely.
+            prompt = f"""Based on the document content and recent conversation, answer the question accurately and concisely.
+
+Recent conversation:
+{conversation_context}
 
 Document Content:
 {context}
 
-Question: {question}
+Current Question: {question}
 
 Answer:"""
             
@@ -150,6 +162,47 @@ Answer:"""
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    def delete_document(self, document_id: str):
+
+        """Delete all vectors for a specific document from Pinecone"""
+        try:
+
+            # Delete all vectors with this document_id from the index
+            delete_response = self.index.delete(
+                filter={"document_id": document_id}
+            )
+                        
+            return {
+                "success": True,
+                "document_id": document_id,
+                "message": f"Document {document_id} deleted from vector database"
+            }
+            
+        except Exception as e:
+
+            return {
+                "success": False, 
+                "error": str(e),
+                "document_id": document_id
+            }
+    def clear_all_documents(self):
+
+        """Clear all documents from Pinecone index"""
+        try:
+            # Delete all vectors in the index
+            self.index.delete(delete_all=True)
+            
+            return {
+            "success": True,
+            "message": "All documents cleared from Pinecone index"
+            }
+        
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }    
+        
     def run(self):
         """Main daemon loop"""
         try:
@@ -172,15 +225,25 @@ Answer:"""
                     elif command == 'query':
                         result = self.query_document(
                             request['question'],
-                            request.get('document_id')
+                            request.get('document_id'),
+                            3,
+                            request.get('conversation_history')
                         )
+                    elif command == 'delete':
+                        result = self.delete_document(
+                            request['document_id']
+                        )
+                    elif command == 'clear_all':
+                        result = self.clear_all_documents()    
                     else:
                         result = {"success": False, "error": f"Unknown command: {command}"}
                     
                     if request_id:
                         result['requestId'] = request_id
+
                     
                     print(json.dumps(result), flush=True)
+                    
                     
                 except Exception as e:
                     error_result = {"success": False, "error": str(e)}
