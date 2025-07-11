@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 from typing import List
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +25,9 @@ class PineconeDaemon:
             # Configure Gemini ONCE
             genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
             self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+
+          # temporary
+            self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY')) 
             
             print(json.dumps({"status": "ready"}), flush=True)
             
@@ -129,6 +133,7 @@ class PineconeDaemon:
                 }
             
             context = "\n\n".join(relevant_chunks)
+            # ✅ ADD DEBUG: Print what context is being sent
 
             conversation_context = ""
             if conversation_history:
@@ -148,13 +153,36 @@ Document Content:
 
 Current Question: {question}
 
+
+
+Question: {question}
+
 Answer:"""
             
-            response = self.gemini_model.generate_content(prompt)
+            # response = self.gemini_model.generate_content(prompt)
             
+            # return {
+            #     "success": True,
+            #     "answer": response.text,
+            #     "sources": relevant_chunks,
+            #     "metadata": metadata_list
+            # }
+
+
+            # ✅ Use OpenAI instead of Gemini temporary
+            response = self.openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+            {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.7
+            )
+
             return {
+
                 "success": True,
-                "answer": response.text,
+                "answer": response.choices[0].message.content,
                 "sources": relevant_chunks,
                 "metadata": metadata_list
             }
