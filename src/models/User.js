@@ -21,6 +21,23 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: true,
         minlength: 6
+    },
+    messagesUsed: {
+        type: Number,
+        default: 0
+    },
+    messagesTotalLimit: {
+        type: Number,
+        default: 10
+    },
+    plan: {
+        type: String,
+        enum: ['free', 'pro'],
+        default: 'free'
+    },
+    stripeCustomerId: {
+        type: String,
+        default: null
     }
 }, {
     timestamps: true

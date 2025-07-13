@@ -1,0 +1,9 @@
+# Ignore environment variables
+.env
+
+# Node.js standard ignores
+node_modules/
+dist/
+uploads/
+*.log
+.DS_Store

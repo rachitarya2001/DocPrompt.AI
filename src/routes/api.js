@@ -1,9 +1,17 @@
+const User = require('../models/User');
+const Document = require('../models/Document');
+const Chat = require('../models/Chat');
 const { spawn } = require('child_process');
 const path = require('path');
 const express = require('express');
 const router = express.Router();
-
 const multer = require('multer');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// imports for our functionality
+const { getUserFromToken } = require('../middleware/auth');
+const { canUserSendMessage, incrementUserMessageCount } = require('../utils/messageUtils');
+
 
 // Configure multer storage
 const storage = multer.diskStorage({
@@ -70,7 +78,7 @@ router.post('/test', (req, res) => {
         method: req.method
     });
 });
-// Add multer error handling
+//  multer error handling
 router.use('/upload', (error, req, res, next) => {
     console.log('❌ Multer error:', error);
     if (error instanceof multer.MulterError) {
@@ -170,8 +178,116 @@ router.post('/extract-text', (req, res) => {
     });
 });
 
+// GET /api/my-documents - Get all documents for the logged-in user
+router.get('/my-documents', getUserFromToken, async (req, res) => {
+    try {
+        console.log(`📄 Loading documents for user: ${req.user._id}`);
+
+        const documents = await Document.find({ userId: req.user._id })
+            .sort({ createdAt: -1 }) // Most recent first
+            .lean(); // Better performance
+
+        // Format documents for frontend
+        const formattedDocuments = documents.map(doc => ({
+            id: doc.documentId,
+            name: doc.name,
+            size: doc.size,
+            extractedText: doc.extractedText,
+            textLength: doc.textLength,
+            chunksStored: doc.chunksStored,
+            processingTime: doc.processingTime,
+            uploadedAt: doc.createdAt.toISOString(),
+            filePath: doc.filePath
+        }));
+
+        console.log(`✅ Found ${formattedDocuments.length} documents`);
+
+        res.json({
+            success: true,
+            documents: formattedDocuments
+        });
+
+    } catch (error) {
+        console.error('❌ Error loading documents:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to load documents',
+            error: error.message
+        });
+    }
+});
+
+// GET /api/chat/:documentId - Get chat history for a specific document
+router.get('/chat/:documentId', getUserFromToken, async (req, res) => {
+    try {
+        const { documentId } = req.params;
+        console.log(`💬 Loading chat for document: ${documentId}`);
+
+        const chat = await Chat.findOne({
+            userId: req.user._id,
+            documentId: documentId
+        });
+
+        if (!chat) {
+            return res.json({
+                success: true,
+                messages: [] // No chat history yet
+            });
+        }
+
+        res.json({
+            success: true,
+            messages: chat.messages
+        });
+
+    } catch (error) {
+        console.error('❌ Error loading chat:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to load chat history'
+        });
+    }
+});
+
+// POST /api/save-message - Save a chat message to MongoDB
+router.post('/save-message', getUserFromToken, async (req, res) => {
+    try {
+        const { documentId, message } = req.body;
+
+        // Find existing chat or create new one
+        let chat = await Chat.findOne({
+            userId: req.user._id,
+            documentId: documentId
+        });
+
+        if (!chat) {
+            chat = new Chat({
+                userId: req.user._id,
+                documentId: documentId,
+                messages: []
+            });
+        }
+
+        // Add the new message
+        chat.messages.push(message);
+        await chat.save();
+
+        res.json({
+            success: true,
+            message: 'Message saved successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Error saving message:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to save message'
+        });
+    }
+});
+
 // POST /api/process-document - Store document in vector database
-router.post('/process-document', (req, res) => {
+router.post('/process-document', getUserFromToken, (req, res) => {
     const { filePath, extractedText, documentId } = req.body;
 
     if (!filePath || !extractedText || !documentId) {
@@ -189,7 +305,7 @@ router.post('/process-document', (req, res) => {
         file_path: filePath,
         text: extractedText,
         document_id: documentId
-    }, (error, result) => {
+    }, async (error, result) => {
         const processingTime = Date.now() - startTime;
         console.log(`⚡ Document processed in ${processingTime}ms`);
 
@@ -200,15 +316,38 @@ router.post('/process-document', (req, res) => {
                 error: error.message
             });
         }
+        try {
+            const fs = require('fs');
+            const fileStats = fs.statSync(filePath);
 
-        // Add timing info to response
+            const document = new Document({
+                userId: req.user._id, // From auth middleware
+                documentId: documentId,
+                name: filePath.split('/').pop(), // Extract filename from path
+                filePath: filePath,
+                size: fileStats.size,
+                extractedText: extractedText,
+                textLength: extractedText.length,
+                chunksStored: result.chunks_stored || 0,
+                processingTime: processingTime
+            });
+
+            await document.save();
+            console.log('✅ Document saved to MongoDB');
+
+        } catch (dbError) {
+            console.error('❌ Failed to save to MongoDB:', dbError);
+            // Don't fail the request - vector DB worked
+        }
+
+        //  timing info to response
         result.processing_time_ms = processingTime;
         res.json(result);
     });
 });
 
 // POST /api/ask-question - Ask AI questions with caching
-router.post('/ask-question', (req, res) => {
+router.post('/ask-question', getUserFromToken, async (req, res) => {
     const { question, documentId, conversationHistory } = req.body;
 
     if (!question) {
@@ -218,26 +357,42 @@ router.post('/ask-question', (req, res) => {
         });
     }
 
+    const limitCheck = canUserSendMessage(req.user);
+
+    if (!limitCheck.allowed) {
+        return res.status(403).json({
+            success: false,
+            message: 'Message limit reached. Please upgrade to continue.',
+            messagesUsed: limitCheck.messagesUsed,
+            messagesTotalLimit: limitCheck.messagesTotalLimit,
+            upgradeRequired: true
+        });
+    }
+
     // Check cache first (even faster!)
     const cachedAnswer = req.app.locals.getCachedAnswer(question, documentId);
     if (cachedAnswer) {
         console.log(`📦 Cache hit for: "${question}"`);
+        await incrementUserMessageCount(req.user._id);
         return res.json({
             ...cachedAnswer,
             cached: true,
-            response_time_ms: 1 // Cache is instant
+            response_time_ms: 1
         });
     }
 
     console.log(`❓ Processing question: "${question}"`);
     const startTime = Date.now();
 
-    // ✅ Use persistent daemon (FAST)
+    // Increment message count BEFORE processing 
+    await incrementUserMessageCount(req.user._id);
+
     req.app.locals.sendToPythonProcess('query', {
         question: question,
         document_id: documentId || null,
-        conversation_history: conversationHistory || []
-    }, (error, result) => {
+        conversation_history: conversationHistory || [],
+        top_k: 8
+    }, async (error, result) => {
         const processingTime = Date.now() - startTime;
         console.log(`⚡ Question answered in ${processingTime}ms`);
 
@@ -254,17 +409,19 @@ router.post('/ask-question', (req, res) => {
             req.app.locals.setCachedAnswer(question, documentId, result);
         }
 
-        // Add timing and cache info
+        //  timing, cache info, and usage info
         result.cached = false;
         result.response_time_ms = processingTime;
         result.processed_timestamp = new Date().toISOString();
+        result.messagesUsed = req.user.messagesUsed + 1;
+        result.messagesTotalLimit = req.user.messagesTotalLimit;
 
         res.json(result);
     });
 });
 
 // POST /api/delete-document - Delete document from vector database and filesystem
-router.post('/delete-document', (req, res) => {
+router.post('/delete-document', getUserFromToken, (req, res) => {
     const { documentId, filePath } = req.body;
 
     if (!documentId) {
@@ -292,7 +449,7 @@ router.post('/delete-document', (req, res) => {
     // Step 1: Delete from Pinecone vector database
     req.app.locals.sendToPythonProcess('delete', {
         document_id: documentId
-    }, (error, result) => {
+    }, async (error, result) => {
         const processingTime = Date.now() - startTime;
         console.log(`⏱️ Python response received in ${processingTime}ms`);
 
@@ -307,7 +464,27 @@ router.post('/delete-document', (req, res) => {
 
         console.log('✅ Python daemon response:', result);
 
-        // Step 2: Delete physical file if path provided
+        // Step 2: Delete from MongoDB
+        try {
+            await Document.findOneAndDelete({
+                userId: req.user._id,
+                documentId: documentId
+            });
+            console.log('✅ Document deleted from MongoDB');
+
+            // Also delete related chat history
+            await Chat.findOneAndDelete({
+                userId: req.user._id,
+                documentId: documentId
+            });
+            console.log('✅ Chat history deleted from MongoDB');
+
+        } catch (dbError) {
+            console.error('❌ Error deleting from MongoDB:', dbError);
+            // Continue with file deletion even if DB delete fails
+        }
+
+        // Step 3: Delete physical file if path provided
         if (filePath) {
             const fs = require('fs');
             try {
@@ -329,12 +506,11 @@ router.post('/delete-document', (req, res) => {
             message: 'Document deleted successfully',
             document_id: documentId,
             processing_time_ms: processingTime,
-            python_result: result // ADD THIS FOR DEBUG
+            python_result: result
         });
     });
 });
 
-// GET /api/clear-cache - Clear all cache (utility endpoint)
 // POST /api/clear-all-documents - Clear entire Pinecone index (for testing)
 router.post('/clear-all-documents', (req, res) => {
     console.log('🧹 Clearing ALL documents from Pinecone...');
@@ -397,4 +573,181 @@ router.post('/force-clear-pinecone', async (req, res) => {
 });
 
 
+// POST /api/reset-user-usage - Reset user's message count (TESTING ONLY)
+router.post('/reset-user-usage', getUserFromToken, async (req, res) => {
+    try {
+        await User.findByIdAndUpdate(req.user._id, {
+            messagesUsed: 0
+        });
+
+        res.json({
+            success: true,
+            message: 'User usage reset to 0'
+        });
+    } catch (error) {
+        console.error('Reset error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// POST /api/create-payment-session - Create real Stripe checkout session
+router.post('/create-payment-session', getUserFromToken, async (req, res) => {
+    try {
+        console.log('💳 Creating real Stripe checkout session for user:', req.user.email);
+
+        // Create real Stripe checkout session
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [
+                {
+                    price_data: {
+                        currency: 'usd',
+                        product_data: {
+                            name: 'DocuPrompt Pro Upgrade',
+                            description: 'Unlock 10 additional AI chat messages',
+                        },
+                        unit_amount: 200, // $2.00 in cents
+                    },
+                    quantity: 1,
+                },
+            ],
+            mode: 'payment',
+            success_url: `http://localhost:3000/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `http://localhost:3000/payment-cancelled`,
+            metadata: {
+                userId: req.user._id.toString(),
+                email: req.user.email
+            }
+        });
+
+        res.json({
+            success: true,
+            sessionId: session.id,
+            checkoutUrl: session.url,
+            message: 'Real Stripe checkout session created'
+        });
+
+    } catch (error) {
+        console.error('Stripe session creation error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// POST /api/verify-payment - Verify payment and upgrade user
+router.post('/verify-payment', getUserFromToken, async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Session ID is required'
+            });
+        }
+
+        console.log('🔍 Verifying payment session:', sessionId, 'for user:', req.user.email);
+
+        // Retrieve the session from Stripe
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        console.log('💳 Stripe session status:', session.payment_status);
+        console.log('💰 Session metadata:', session.metadata);
+
+        // Check if payment was successful
+        if (session.payment_status === 'paid') {
+            // Verify this session belongs to the current user
+            if (session.metadata.userId !== req.user._id.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Payment session does not belong to current user'
+                });
+            }
+
+            // Check if user is already upgraded (prevent double upgrades)
+            if (req.user.plan === 'pro') {
+                return res.json({
+                    success: true,
+                    message: 'User already has pro plan',
+                    alreadyUpgraded: true
+                });
+            }
+
+            // Upgrade user to pro plan
+            await User.findByIdAndUpdate(req.user._id, {
+                plan: 'pro',
+                messagesTotalLimit: 20,
+                // Keep current messagesUsed - don't reset
+            });
+
+            console.log('✅ User upgraded to PRO plan with 20 message limit');
+
+            res.json({
+                success: true,
+                message: 'Payment verified and account upgraded successfully!',
+                plan: 'pro',
+                messagesTotalLimit: 20,
+                paymentAmount: session.amount_total / 100, // Convert from cents
+                paymentDate: new Date().toISOString()
+            });
+
+        } else {
+            res.status(400).json({
+                success: false,
+                message: 'Payment was not completed successfully',
+                paymentStatus: session.payment_status
+            });
+        }
+
+    } catch (error) {
+        console.error('Payment verification error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error verifying payment',
+            error: error.message
+        });
+    }
+});
+
+// GET /api/validate-token - Validate JWT token and return fresh user data
+router.get('/validate-token', getUserFromToken, async (req, res) => {
+    try {
+        // If getUserFromToken middleware passes, token is valid
+        // Return fresh user data from database
+        const freshUser = await User.findById(req.user._id).select('-password');
+
+        if (!freshUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            user: {
+                id: freshUser._id,
+                username: freshUser.username,
+                email: freshUser.email,
+                messagesUsed: freshUser.messagesUsed,
+                messagesTotalLimit: freshUser.messagesTotalLimit,
+                plan: freshUser.plan
+            },
+            message: 'Token is valid'
+        });
+
+    } catch (error) {
+        console.error('Token validation error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error validating token',
+            error: error.message
+        });
+    }
+});
 module.exports = router;

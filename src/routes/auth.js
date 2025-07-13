@@ -47,7 +47,10 @@ router.post('/register', async (req, res) => {
             user: {
                 id: user._id,
                 username: user.username,
-                email: user.email
+                email: user.email,
+                messagesUsed: user.messagesUsed,
+                messagesTotalLimit: user.messagesTotalLimit,
+                plan: user.plan
             }
         });
 
@@ -99,7 +102,10 @@ router.post('/login', async (req, res) => {
             user: {
                 id: user._id,
                 username: user.username,
-                email: user.email
+                email: user.email,
+                messagesUsed: user.messagesUsed,
+                messagesTotalLimit: user.messagesTotalLimit,
+                plan: user.plan
             }
         });
 

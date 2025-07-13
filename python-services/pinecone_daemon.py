@@ -1,3 +1,8 @@
+pinecode
+
+
+
+
 import sys
 import json
 import os
@@ -254,7 +259,7 @@ Answer:"""
                         result = self.query_document(
                             request['question'],
                             request.get('document_id'),
-                            3,
+                            request.get('top_k', 8),
                             request.get('conversation_history')
                         )
                     elif command == 'delete':
