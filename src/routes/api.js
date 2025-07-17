@@ -750,4 +750,339 @@ router.get('/validate-token', getUserFromToken, async (req, res) => {
         });
     }
 });
+
+// GET /api/analytics - Get user analytics data
+router.get('/analytics', getUserFromToken, async (req, res) => {
+    try {
+        console.log(`📊 Loading analytics for user: ${req.user._id}`);
+
+        // Get user's documents
+        const documents = await Document.find({ userId: req.user._id });
+
+        // Get user's chats
+        const chats = await Chat.find({ userId: req.user._id });
+
+        // Calculate total messages across all chats
+        let totalMessages = 0;
+        let documentsWithChats = 0;
+        let documentMessageCounts = {};
+
+        chats.forEach(chat => {
+            if (chat.messages && chat.messages.length > 0) {
+                totalMessages += chat.messages.length;
+                documentsWithChats++;
+
+                // Count messages for this document
+                documentMessageCounts[chat.documentId] = chat.messages.length;
+            }
+        });
+
+        // Find most accessed document
+        let mostAccessedDocument = null;
+        if (Object.keys(documentMessageCounts).length > 0) {
+            const mostAccessedDocId = Object.keys(documentMessageCounts).reduce((a, b) =>
+                documentMessageCounts[a] > documentMessageCounts[b] ? a : b
+            );
+
+            const mostAccessedDoc = documents.find(doc => doc.documentId === mostAccessedDocId);
+            if (mostAccessedDoc) {
+                mostAccessedDocument = {
+                    name: mostAccessedDoc.name,
+                    messageCount: documentMessageCounts[mostAccessedDocId],
+                    documentId: mostAccessedDocId
+                };
+            }
+        }
+        // Prepare document messages data for chart
+        let documentMessagesData = [];
+        documents.forEach(doc => {
+            const messageCount = documentMessageCounts[doc.documentId] || 0;
+            if (messageCount > 0) { // Only include documents with messages
+                documentMessagesData.push({
+                    name: doc.name,
+                    messages: messageCount,
+                    documentId: doc.documentId
+                });
+            }
+        });
+
+        // Sort by message count (highest first)
+        documentMessagesData.sort((a, b) => b.messages - a.messages);
+
+        // Find largest document
+        let largestDocument = null;
+        if (documents.length > 0) {
+            largestDocument = documents.reduce((largest, doc) =>
+                doc.size > largest.size ? doc : largest
+            );
+        }
+
+        // Find most recent document
+        let lastDocument = null;
+        if (documents.length > 0) {
+            lastDocument = documents.reduce((latest, doc) =>
+                new Date(doc.createdAt) > new Date(latest.createdAt) ? doc : latest
+            );
+        }
+
+        // Calculate average messages per document
+        const averageMessagesPerDocument = documents.length > 0
+            ? totalMessages / documents.length
+            : 0;
+
+        const analyticsData = {
+            totalDocuments: documents.length,
+            totalMessages: totalMessages,
+            totalChats: chats.length,
+            documentsWithChats: documentsWithChats,
+            lastDocumentUploaded: lastDocument ? lastDocument.name : null,
+            lastUploadDate: lastDocument ? lastDocument.createdAt.toISOString() : null,
+            largestDocument: largestDocument ? {
+                name: largestDocument.name,
+                size: largestDocument.size
+            } : null,
+            mostAccessedDocument: mostAccessedDocument,
+            documentMessagesData: documentMessagesData,
+            messagesUsed: req.user.messagesUsed,
+            messagesTotalLimit: req.user.messagesTotalLimit,
+            plan: req.user.plan,
+            averageMessagesPerDocument: averageMessagesPerDocument
+        };
+
+        console.log(`✅ Analytics calculated:`, analyticsData);
+
+        res.json(analyticsData);
+
+    } catch (error) {
+        console.error('❌ Error loading analytics:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to load analytics',
+            error: error.message
+        });
+    }
+});
+
+// PUT /api/user/profile - Update user profile
+router.put('/user/profile', getUserFromToken, async (req, res) => {
+    try {
+        const { username, email } = req.body;
+
+        // Validation
+        if (!username || username.trim().length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username must be at least 2 characters long'
+            });
+        }
+
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide a valid email address'
+            });
+        }
+
+        // Check if email is already taken by another user
+        const existingUser = await User.findOne({
+            email: email.toLowerCase(),
+            _id: { $ne: req.user._id }
+        });
+
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email is already taken by another user'
+            });
+        }
+
+        // Update user
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user._id,
+            {
+                username: username.trim(),
+                email: email.toLowerCase().trim()
+            },
+            { new: true, runValidators: true }
+        ).select('-password');
+
+        console.log(`✅ Profile updated for user: ${updatedUser.username}`);
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            user: updatedUser
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating profile:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update profile'
+        });
+    }
+});
+
+// POST /api/user/change-password - Change user password
+router.post('/user/change-password', getUserFromToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        // Validation
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password and new password are required'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 6 characters long'
+            });
+        }
+
+        // Get user with password field
+        const user = await User.findById(req.user._id).select('+password');
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Verify current password
+        const bcrypt = require('bcryptjs');
+        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+
+        if (!isCurrentPasswordValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        // Check if new password is different from current
+        const isSamePassword = await bcrypt.compare(newPassword, user.password);
+        if (isSamePassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be different from current password'
+            });
+        }
+
+        // Hash new password
+        const saltRounds = 10;
+        const hashedNewPassword = await bcrypt.hash(newPassword, saltRounds);
+
+        // Update password in database
+        await User.findByIdAndUpdate(req.user._id, {
+            password: hashedNewPassword
+        });
+
+        console.log(`✅ Password changed for user: ${user.username}`);
+
+        res.json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Error changing password:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to change password'
+        });
+    }
+});
+
+// PUT /api/user/preferences - Update user preferences
+router.put('/user/preferences', getUserFromToken, async (req, res) => {
+    try {
+        const allowedPreferences = ['darkMode', 'autoSave', 'notifications'];
+        const updates = {};
+        
+        // Validate and filter incoming preferences
+        for (const [key, value] of Object.entries(req.body)) {
+            if (allowedPreferences.includes(key) && typeof value === 'boolean') {
+                updates[`preferences.${key}`] = value;
+            }
+        }
+        
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No valid preferences provided'
+            });
+        }
+        
+        // Update user preferences
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user._id,
+            { $set: updates },
+            { new: true, runValidators: true }
+        ).select('-password');
+        
+        if (!updatedUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        console.log(`✅ Preferences updated for user: ${updatedUser.username}`, updates);
+        
+        res.json({
+            success: true,
+            message: 'Preferences updated successfully',
+            preferences: updatedUser.preferences
+        });
+        
+    } catch (error) {
+        console.error('❌ Error updating preferences:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update preferences'
+        });
+    }
+});
+
+// GET /api/user/preferences - Get user preferences
+router.get('/user/preferences', getUserFromToken, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select('preferences');
+        
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+        
+        // Default preferences if none exist
+        const defaultPreferences = {
+            darkMode: true,
+            autoSave: true,
+            notifications: false
+        };
+        
+        const userPreferences = {
+            ...defaultPreferences,
+            ...user.preferences
+        };
+        
+        res.json({
+            success: true,
+            preferences: userPreferences
+        });
+        
+    } catch (error) {
+        console.error('❌ Error fetching preferences:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch preferences'
+        });
+    }
+});
 module.exports = router;

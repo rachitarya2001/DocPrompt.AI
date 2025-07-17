@@ -38,6 +38,11 @@ const userSchema = new mongoose.Schema({
     stripeCustomerId: {
         type: String,
         default: null
+    },
+    preferences: {
+        darkMode: { type: Boolean, default: true },
+        autoSave: { type: Boolean, default: true },
+        notifications: { type: Boolean, default: false }
     }
 }, {
     timestamps: true
