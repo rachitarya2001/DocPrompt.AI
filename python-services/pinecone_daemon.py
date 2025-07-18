@@ -146,6 +146,31 @@ class PineconeDaemon:
             
             prompt = f"""Based on the document content and recent conversation, answer the question accurately and concisely.
 
+Guidelines:
+- Answer questions using ONLY the information found in the provided document content
+- Use a natural, conversational tone  
+- Keep responses clear and concise
+- If information isn't in the document, say "I don't see that information in this document"
+- Handle follow-up questions by maintaining conversation context
+- Don't make assumptions about what type of document this is
+
+Response formatting:
+- When asked for a summary, provide a clear overview of the document's main content and purpose
+- When asked for lists of items (skills, technologies, requirements, ingredients, steps, etc.), format as clean bullet points
+- When asked for specific details, provide descriptive answers with relevant quotes when helpful
+- When asked about topics not covered, be honest about their absence
+- Maintain context from previous questions in the conversation
+
+Examples of different response types:
+- Summary requests: "Can you summarize this?" → Provide overview
+- List requests: "What technologies/skills/tools are mentioned?" → Use bullet points  
+- Detail requests: "Tell me about..." → Provide descriptive paragraphs
+- Clarification: "I don't see information about that topic in this document"
+- When users ask for multiple items (using words like "all", "list", "what are", "give me"), ALWAYS format as bullet points
+- Use • symbol for clean bullet points
+- Put each item on a separate line
+
+
 Recent conversation:
 {conversation_context}
 
