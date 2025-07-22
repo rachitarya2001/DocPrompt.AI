@@ -615,8 +615,8 @@ router.post('/create-payment-session', getUserFromToken, async (req, res) => {
                 },
             ],
             mode: 'payment',
-            success_url: `http://localhost:3000/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `http://localhost:3000/payment-cancelled`,
+            success_url: `${process.env.FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${process.env.FRONTEND_URL}/payment-cancelled`,
             metadata: {
                 userId: req.user._id.toString(),
                 email: req.user.email
@@ -1002,43 +1002,43 @@ router.put('/user/preferences', getUserFromToken, async (req, res) => {
     try {
         const allowedPreferences = ['darkMode', 'autoSave', 'notifications'];
         const updates = {};
-        
+
         // Validate and filter incoming preferences
         for (const [key, value] of Object.entries(req.body)) {
             if (allowedPreferences.includes(key) && typeof value === 'boolean') {
                 updates[`preferences.${key}`] = value;
             }
         }
-        
+
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({
                 success: false,
                 message: 'No valid preferences provided'
             });
         }
-        
+
         // Update user preferences
         const updatedUser = await User.findByIdAndUpdate(
             req.user._id,
             { $set: updates },
             { new: true, runValidators: true }
         ).select('-password');
-        
+
         if (!updatedUser) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
-        
+
         console.log(`✅ Preferences updated for user: ${updatedUser.username}`, updates);
-        
+
         res.json({
             success: true,
             message: 'Preferences updated successfully',
             preferences: updatedUser.preferences
         });
-        
+
     } catch (error) {
         console.error('❌ Error updating preferences:', error);
         res.status(500).json({
@@ -1052,31 +1052,31 @@ router.put('/user/preferences', getUserFromToken, async (req, res) => {
 router.get('/user/preferences', getUserFromToken, async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('preferences');
-        
+
         if (!user) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
-        
+
         // Default preferences if none exist
         const defaultPreferences = {
             darkMode: true,
             autoSave: true,
             notifications: false
         };
-        
+
         const userPreferences = {
             ...defaultPreferences,
             ...user.preferences
         };
-        
+
         res.json({
             success: true,
             preferences: userPreferences
         });
-        
+
     } catch (error) {
         console.error('❌ Error fetching preferences:', error);
         res.status(500).json({
