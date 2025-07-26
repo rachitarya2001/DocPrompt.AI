@@ -58,7 +58,7 @@ function setCachedAnswer(question, documentId, answer) {
     if (questionCache.size >= MAX_CACHE_SIZE) {
         const oldestKey = questionCache.keys().next().value;
         questionCache.delete(oldestKey);
-        console.log('🧹 Cache size limit reached, removed oldest entry');
+        console.log('Cache size limit reached, removed oldest entry');
     }
     const key = getCacheKey(question, documentId);
     questionCache.set(key, {
@@ -73,27 +73,25 @@ app.locals.setCachedAnswer = setCachedAnswer;
 
 // Optional: Log cache stats
 setInterval(() => {
-    console.log(`📊 Cache stats: ${questionCache.size} entries`);
 }, 5 * 60 * 1000); // Every 5 minutes
 let pythonProcess = null;
 let isProcessReady = false;
 const pendingRequests = new Map();
 let requestId = 0;
-let restartCount = 0;                    // ✅ ADD THIS
-const MAX_RESTARTS = 5;                  // ✅ ADD THIS  
+let restartCount = 0;
+const MAX_RESTARTS = 5;
 const RESTART_WINDOW = 60000;
 
 // Start persistent Python process
 function startPythonProcess() {
 
     if (restartCount >= MAX_RESTARTS) {
-        console.error('❌ Max restart attempts reached. Manual intervention required.');
-        console.error('💡 Try restarting the server manually: npm run dev');
+        console.error('Max restart attempts reached. Manual intervention required.');
+        console.error('Try restarting the server manually: npm run dev');
         return;
     }
 
-    restartCount++;  // ✅ ADD THIS
-    console.log(`🔄 Starting Python process (attempt ${restartCount})`);
+    restartCount++;
 
     const scriptPath = path.join(__dirname, 'python-services/pinecone_daemon.py');
     pythonProcess = spawn('python', [scriptPath]);
@@ -106,7 +104,7 @@ function startPythonProcess() {
             setTimeout(() => {
                 if (isProcessReady) {
                     restartCount = 0;
-                    console.log('✅ Python process stable, reset restart counter');
+                    console.log('Python process stable, reset restart counter');
                 }
             }, RESTART_WINDOW);
         }
@@ -121,7 +119,7 @@ function startPythonProcess() {
 
                     if (response.status === 'ready') {
                         isProcessReady = true;
-                        console.log('✅ Python process ready for requests');
+                        console.log('Python process ready for requests');
                         return;
                     }
 
@@ -196,6 +194,6 @@ process.on('SIGINT', () => {
 // Connect to database then start server
 connectDB().then(() => {
     app.listen(process.env.PORT || 5000, () => {
-        console.log(`🚀 DocuPrompt server running on port ${process.env.PORT || 5000}`);
+        console.log(`DocuPrompt server running on port ${process.env.PORT || 5000}`);
     });
 });

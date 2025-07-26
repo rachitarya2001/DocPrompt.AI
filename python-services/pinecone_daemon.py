@@ -7,7 +7,7 @@ from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 from typing import List
 from dotenv import load_dotenv
-from openai import OpenAI
+
 
 # Load environment variables
 load_dotenv()
@@ -27,8 +27,6 @@ class PineconeDaemon:
             genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
             self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
-          # temporary
-            self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY')) 
             
             print(json.dumps({"status": "ready"}), flush=True)
             
@@ -143,32 +141,47 @@ class PineconeDaemon:
                     role = "User" if msg.get('type') == 'user' else "Assistant"
                     content = msg.get('content', '')[:150]  # Limit to 150 chars
                     conversation_context += f"{role}: {content}\n"
+
+            is_first_message = not conversation_history or len(conversation_history) == 0
+            greeting = "Hi there! " if is_first_message else ""
             
-            prompt = f"""Based on the document content and recent conversation, answer the question accurately and concisely.
+            prompt =  f"""You are a helpful AI assistant that can analyze ANY type of document. Answer the user's question in a natural, conversational way.
 
-Guidelines:
-- Answer questions using ONLY the information found in the provided document content
-- Use a natural, conversational tone  
-- Keep responses clear and concise
-- If information isn't in the document, say "I don't see that information in this document"
-- Handle follow-up questions by maintaining conversation context
-- Don't make assumptions about what type of document this is
 
-Response formatting:
-- When asked for a summary, provide a clear overview of the document's main content and purpose
-- When asked for lists of items (skills, technologies, requirements, ingredients, steps, etc.), format as clean bullet points
-- When asked for specific details, provide descriptive answers with relevant quotes when helpful
-- When asked about topics not covered, be honest about their absence
-- Maintain context from previous questions in the conversation
+UNIVERSAL DOCUMENT ANALYSIS:
+{"Start with a friendly greeting since this is the first interaction" if is_first_message else "Continue the conversation naturally without greetings"}
+- Work with ALL document types: ID cards, resumes, invoices, contracts, reports, certificates, letters, forms, etc.
+- Always look carefully for relevant information throughout the document
+- Be confident when information is clearly present
+- Be conversational but concise
 
-Examples of different response types:
-- Summary requests: "Can you summarize this?" → Provide overview
-- List requests: "What technologies/skills/tools are mentioned?" → Use bullet points  
-- Detail requests: "Tell me about..." → Provide descriptive paragraphs
-- Clarification: "I don't see information about that topic in this document"
-- When users ask for multiple items (using words like "all", "list", "what are", "give me"), ALWAYS format as bullet points
-- Use • symbol for clean bullet points
-- Put each item on a separate line
+DOCUMENT TYPE RECOGNITION:
+- ID Documents: Look for names, numbers (may be masked like XXXXXXXX1234), dates, addresses, relationships (S/O, D/O, W/O)
+- Resumes/CVs: Find names, contact info, skills, experience, education, certifications
+- Business Documents: Company names, amounts, dates, terms, contact details, signatures
+- Certificates: Institution names, degrees, dates, student names, grades
+- Invoices: Company details, amounts, item descriptions, dates, payment terms
+- Contracts: Parties involved, terms, dates, amounts, conditions
+- Reports: Key findings, data, conclusions, recommendations
+- Forms: All filled information, checkboxes, signatures
+
+EXPERIENCE & DATE CALCULATIONS:
+- For experience questions, ALWAYS calculate step by step
+ * Jan-Apr = ~4 months, Jan-Jun = ~6 months, Jan-Dec = ~12 months
+ * Feb-Present (if current date is July) = ~5 months
+- Add up multiple experiences: "4 months + 5 months = 9 months total"
+- Convert when asked: "9 months = 0.75 years" or "2 years = 24 months"
+- NEVER make up numbers - only use dates/periods from the document
+- If dates are unclear, say "approximately" and explain your reasoning
+
+RESPONSE STYLE:
+- Use conversational phrases: "I can see that...", "The document shows...", "According to this..."
+- Be helpful and friendly
+- For numbers that are partially masked (XXXXXXXX1234), mention they're "partially hidden for privacy"
+- For relationships (S/O = Son Of, D/O = Daughter Of, W/O = Wife Of), explain the meaning
+- When asked for summaries, provide comprehensive overviews
+- When asked for lists, use bullet points with • symbol
+- Only say information is missing if you truly cannot find it anywhere
 
 
 Recent conversation:
@@ -177,41 +190,19 @@ Recent conversation:
 Document Content:
 {context}
 
-Current Question: {question}
-
-
-
 Question: {question}
 
-Answer:"""
+Answer in a friendly, conversational tone:"""
             
-            # response = self.gemini_model.generate_content(prompt)
+            response = self.gemini_model.generate_content(prompt)
             
-            # return {
-            #     "success": True,
-            #     "answer": response.text,
-            #     "sources": relevant_chunks,
-            #     "metadata": metadata_list
-            # }
-
-
-            # ✅ Use OpenAI instead of Gemini temporary
-            response = self.openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-            {"role": "user", "content": prompt}
-            ],
-            max_tokens=500,
-            temperature=0.7
-            )
-
             return {
-
                 "success": True,
-                "answer": response.choices[0].message.content,
+                "answer": response.text,
                 "sources": relevant_chunks,
                 "metadata": metadata_list
             }
+
             
         except Exception as e:
             return {"success": False, "error": str(e)}
