@@ -8,7 +8,6 @@ const paymentController = require('../controllers/paymentController');
 const chatController = require('../controllers/chatController');
 const adminController = require('../controllers/adminController');
 const userController = require('../controllers/userController');
-const authRoutes = require('./routes/auth');
 
 
 const User = require('../models/User');
