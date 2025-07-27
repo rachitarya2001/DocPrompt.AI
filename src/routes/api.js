@@ -10,6 +10,7 @@ const adminController = require('../controllers/adminController');
 const userController = require('../controllers/userController');
 
 
+
 const User = require('../models/User');
 const Document = require('../models/Document');
 const Chat = require('../models/Chat');
@@ -20,8 +21,6 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 
 // imports for our functionality
 const { getUserFromToken } = require('../middleware/auth');
@@ -67,107 +66,6 @@ const upload = multer({
             console.log('File type rejected:', file.mimetype);
             cb(new Error(`Invalid file type: ${file.mimetype}`), false);
         }
-    }
-});
-
-router.post('/auth/register', async (req, res) => {
-    try {
-        const { username, email, password } = req.body;
-
-        const existingUser = await User.findOne({
-            $or: [{ email }, { username }]
-        });
-
-        if (existingUser) {
-            return res.status(400).json({
-                success: false,
-                message: 'User already exists'
-            });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 12);
-
-        const user = new User({
-            username,
-            email,
-            password: hashedPassword
-        });
-
-        await user.save();
-
-        const token = jwt.sign(
-            { userId: user._id },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        res.status(201).json({
-            success: true,
-            token,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                messagesUsed: user.messagesUsed,
-                messagesTotalLimit: user.messagesTotalLimit,
-                plan: user.plan
-            }
-        });
-
-    } catch (error) {
-        console.error('Registration error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Registration failed'
-        });
-    }
-});
-
-router.post('/auth/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-        if (!isPasswordValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        const token = jwt.sign(
-            { userId: user._id },
-            process.env.JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
-        res.json({
-            success: true,
-            token,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                messagesUsed: user.messagesUsed,
-                messagesTotalLimit: user.messagesTotalLimit,
-                plan: user.plan
-            }
-        });
-
-    } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Login failed'
-        });
     }
 });
 
