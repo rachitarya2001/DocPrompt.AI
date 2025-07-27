@@ -8,6 +8,7 @@ const paymentController = require('../controllers/paymentController');
 const chatController = require('../controllers/chatController');
 const adminController = require('../controllers/adminController');
 const userController = require('../controllers/userController');
+const authRoutes = require('./routes/auth');
 
 
 const User = require('../models/User');
@@ -67,6 +68,9 @@ const upload = multer({
         }
     }
 });
+
+// auth routes 
+router.use('/auth', authRoutes);
 
 // GET /api/ - Welcome message
 router.get('/', healthController.getWelcome);
